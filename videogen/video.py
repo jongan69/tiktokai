@@ -6,14 +6,14 @@ import srt_equalizer
 import assemblyai as aai
 
 from typing import List
-from moviepy.editor import VideoFileClip, AudioFileClip, TextClip, CompositeVideoClip, concatenate_videoclips
+from moviepy.editor import VideoFileClip, concatenate_videoclips, CompositeVideoClip, AudioFileClip, TextClip
 from termcolor import colored
 from dotenv import load_dotenv
 from datetime import timedelta
 from moviepy.video.fx.all import crop
 from moviepy.video.tools.subtitles import SubtitlesClip
-from moviepy.video.fx.resize import resize
-from moviepy.video.fx.all import crop, resize
+from moviepy.video.fx.fadein import fadein
+from moviepy.video.fx.fadeout import fadeout
 
 load_dotenv("../.env")
 
@@ -148,7 +148,7 @@ def generate_subtitles(audio_path: str, sentences: List[str], directory: str, au
 
 def combine_videos(video_paths: List[str], max_duration: int, max_clip_duration: int, threads: int) -> str:
     """
-    Combines a list of videos into one video with punch in/out effects between clips.
+    Combines a list of videos into one video and returns the path to the combined video.
 
     Args:
         video_paths (List): A list of paths to the videos to combine.
@@ -162,6 +162,7 @@ def combine_videos(video_paths: List[str], max_duration: int, max_clip_duration:
     video_id = uuid.uuid4()
     combined_video_path = f"./temp/{video_id}.mp4"
     
+    # Required duration of each clip
     req_dur = max_duration / len(video_paths)
 
     print(colored("[+] Combining videos...", "blue"))
@@ -169,52 +170,41 @@ def combine_videos(video_paths: List[str], max_duration: int, max_clip_duration:
 
     clips = []
     tot_dur = 0
+    fade_duration = 0.5  # Duration of fade effect in seconds
     
-    def add_punch_effect(clip, duration=0.15):
-        """Add punch in/out effect to a clip"""
-        def punch(t):
-            # Create a scale factor that goes from 1.0 -> 1.1 -> 1.0
-            if t < duration:
-                scale = 1.0 + (0.1 * (t/duration))
-            elif t > clip.duration - duration:
-                scale = 1.0 + (0.1 * ((clip.duration - t)/duration))
-            else:
-                scale = 1.1
-            return scale
-
-        clip = clip.resize(lambda t: punch(t))
-        return clip
-
     while tot_dur < max_duration:
         for video_path in video_paths:
             clip = VideoFileClip(video_path)
             clip = clip.without_audio()
-            
+            # Check if clip is longer than the remaining audio
             if (max_duration - tot_dur) < clip.duration:
                 clip = clip.subclip(0, (max_duration - tot_dur))
+            # Only shorten clips if the calculated clip length (req_dur) is shorter than the actual clip to prevent still image
             elif req_dur < clip.duration:
                 clip = clip.subclip(0, req_dur)
-            
             clip = clip.set_fps(30)
 
-            # Crop to correct aspect ratio
+            # Not all videos are same size,
+            # so we need to resize them
             if round((clip.w/clip.h), 4) < 0.5625:
-                clip = crop(clip, width=clip.w, height=round(clip.w/0.5625),
-                          x_center=clip.w / 2,
-                          y_center=clip.h / 2)
+                clip = crop(clip, width=clip.w, height=round(clip.w/0.5625), \
+                            x_center=clip.w / 2, \
+                            y_center=clip.h / 2)
             else:
-                clip = crop(clip, width=round(0.5625*clip.h), height=clip.h,
-                          x_center=clip.w / 2,
-                          y_center=clip.h / 2)
-            
+                clip = crop(clip, width=round(0.5625*clip.h), height=clip.h, \
+                            x_center=clip.w / 2, \
+                            y_center=clip.h / 2)
             clip = clip.resize((1080, 1920))
 
             if clip.duration > max_clip_duration:
                 clip = clip.subclip(0, max_clip_duration)
 
-            # Add punch effect to the clip
-            clip = add_punch_effect(clip)
-
+            # Add fade effects
+            if clips:  # If not the first clip
+                clip = clip.fx(fadein, fade_duration)
+            if tot_dur + clip.duration >= max_duration:  # If last clip
+                clip = clip.fx(fadeout, fade_duration)
+            
             clips.append(clip)
             tot_dur += clip.duration
 
